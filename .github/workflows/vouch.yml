@@ -1,0 +1,23 @@
+name: Vouch
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  vouch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check VOUCHED.td
+        run: |
+          if [ -f .github/VOUCHED.td ]; then
+            echo "VOUCHED.td found"
+            cat .github/VOUCHED.td
+          else
+            echo "VOUCHED.td not found"
+            exit 1
+          fi

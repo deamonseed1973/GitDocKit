@@ -1,0 +1,26 @@
+name: Swift CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libgit2 dependencies
+        run: |
+          apt-get update
+          apt-get install -y libgit2-dev cmake libssl-dev
+
+      - name: Build
+        run: swift build -v
+
+      - name: Test
+        run: swift test -v
