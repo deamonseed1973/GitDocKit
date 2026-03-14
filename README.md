@@ -1,70 +1,60 @@
 # GitDocKit
 
-A Swift Package providing `ReferenceFileDocument`-conforming base classes backed by a libgit2 repository. A chimera combining the best ideas from three projects:
+A Swift Package that marries Apple's `ReferenceFileDocument` with [libgit2](https://libgit2.org) — giving you a document-based app where **git is the persistence layer**.
 
-- **[SwiftGitX](https://github.com/ibrahimcetin/SwiftGitX)** — Swift 6 libgit2 wrapper (the git backend)
-- **[AsyncSwiftGit](https://github.com/bdewey/AsyncSwiftGit)** — async/await concurrency patterns for libgit2
-- **[Xit](https://github.com/Uncommon/Xit)** — NSDocument pattern for git repositories (the document model)
+GitDocKit is a *chimera* combining ideas from three projects:
 
-GitDocKit fuses these approaches into a single package: your SwiftUI document *is* a git repository, with undo powered by `git reset`, staging and commits exposed as simple Swift API calls, and everything built for Swift 6 strict concurrency.
-
-## Platforms
-
-- macOS 13+
-- iOS 16+
+| Source | What it contributes |
+|---|---|
+| [SwiftGitX](https://github.com/ibrahimcetin/SwiftGitX) | Swift 6, libgit2 wrapper (MIT) — the git backend |
+| [AsyncSwiftGit](https://github.com/bdewey/AsyncSwiftGit) | async/await libgit2 patterns — the concurrency model |
+| [Xit](https://github.com/Uncommon/Xit) | NSDocument pattern for git repos — the document model |
 
 ## Installation
 
-Add GitDocKit to your project via Swift Package Manager:
+Add GitDocKit via Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/deamonseed1973/GitDocKit.git", from: "1.0.0"),
+    .package(url: "https://github.com/ArcticForge/GitDocKit.git", from: "1.0.0"),
 ]
 ```
 
-Then add `GitDocKit` to your target's dependencies:
-
-```swift
-.target(name: "MyApp", dependencies: ["GitDocKit"])
-```
+Then add `"GitDocKit"` as a dependency of your target.
 
 ## Usage
 
-### Open a Repository
+### Open a repository
 
 ```swift
 import GitDocKit
 
 let repo = try GitRepository(url: URL(fileURLWithPath: "/path/to/repo"))
-let log = try repo.log()
-for commit in log {
-    print("\(commit.id.prefix(7)) \(commit.message)")
-}
+print(repo.currentBranch ?? "HEAD detached")
+print(repo.branches)
 ```
 
-### Stage and Commit
+### Stage and commit
 
 ```swift
-let repo = try GitRepository(url: repoURL)
+let author = GitSignature(name: "Ada Lovelace", email: "ada@example.com")
 
-// Stage everything
 try repo.stageAll()
-
-// Commit
-let author = GitSignature(name: "Jane Dev", email: "jane@example.com")
-let commit = try repo.commit(message: "Add new feature", author: author)
-print("Created commit: \(commit.id)")
+let commit = try repo.commit(message: "Add analytical engine notes", author: author)
+print("Created commit \(commit.id)")
 ```
 
-### Undo a Commit
+### Undo a commit
 
 ```swift
-// Reset to HEAD~1 (undo the last commit, keeps changes in working dir)
-try repo.undoLastCommit()
+// Using the document model (registers with UndoManager):
+document.registerCommitUndo(message: "Add analytical engine notes")
+
+// Or directly:
+try repo.undoLastCommit()  // git reset HEAD~1 --mixed
 ```
 
-### Use GitDocumentGroup in SwiftUI
+### Use GitDocumentGroup in a SwiftUI app
 
 ```swift
 import SwiftUI
@@ -74,7 +64,11 @@ import GitDocKit
 struct MyApp: App {
     var body: some Scene {
         GitDocumentGroup { document in
-            ContentView(document: document)
+            if let repo = document.repository {
+                RepositoryView(repo: repo)
+            } else {
+                Text("Not a git repository")
+            }
         }
     }
 }
@@ -82,25 +76,29 @@ struct MyApp: App {
 
 ## Architecture
 
-### Layer 1: Git Backend (`GitRepository`, `GitCommit`)
+GitDocKit is organized in two layers:
 
-The foundation layer wraps SwiftGitX's synchronous libgit2 API in `@MainActor`-isolated classes with clean Swift interfaces. `GitRepository` provides staging, committing, log, reset, and status operations. `GitCommit` is an immutable value type representing a commit.
+### Layer 1 — Git Core
 
-### Layer 2: Document Model (`GitReferenceFileDocument`, `GitDocumentGroup`, `GitHookObserver`)
+- **`GitRepository`** — `@MainActor` observable wrapper around SwiftGitX's `Repository`. Exposes staging, committing, branching, log, and status as `@Published` properties.
+- **`GitCommit`** / **`GitSignature`** — Lightweight, `Sendable` value types for commits and author info.
+- **`GitHookObserver`** — Watches `.git/hooks/` via GCD dispatch sources and publishes installed hooks.
 
-The document layer builds on Layer 1 to provide SwiftUI integration:
+### Layer 2 — Document Integration
 
-- **`GitReferenceFileDocument`** — A `ReferenceFileDocument` subclass where the document *is* a git repository directory. Reads open the repo from a `FileWrapper`; writes serialize back. Undo support is built in via `git reset`.
-- **`GitDocumentGroup`** — A SwiftUI `Scene` wrapper that creates a `DocumentGroup` pre-configured for git repository documents.
-- **`GitHookObserver`** — Watches `.git/hooks/` using `DispatchSource` and publishes change events, enabling reactive UI updates when hooks are modified.
+- **`GitReferenceFileDocument`** — A `ReferenceFileDocument` that opens a directory as a git repo. Snapshot is `Void` because the git repository on disk *is* the source of truth. Supports undo via `UndoManager` (each commit registers a reset-to-HEAD~1 undo action).
+- **`GitDocumentGroup`** — A SwiftUI `Scene` convenience that wraps `DocumentGroup(viewing:)` for git repositories.
+
+## Requirements
+
+- Swift 6.0+
+- macOS 13+ / iOS 16+
 
 ## Credits
 
-GitDocKit is a chimera built on the shoulders of:
-
-- **[SwiftGitX](https://github.com/ibrahimcetin/SwiftGitX)** by Ibrahim Cetin — Swift 6, libgit2 wrapper, MIT license
-- **[AsyncSwiftGit](https://github.com/bdewey/AsyncSwiftGit)** by Brian Dewey — async/await patterns for libgit2
-- **[Xit](https://github.com/Uncommon/Xit)** by Uncommon — NSDocument pattern for git repositories
+- [SwiftGitX](https://github.com/ibrahimcetin/SwiftGitX) by Ibrahim Cetin — the libgit2 Swift wrapper powering the git backend.
+- [AsyncSwiftGit](https://github.com/bdewey/AsyncSwiftGit) by Brian Dewey — inspiration for the async/await concurrency patterns.
+- [Xit](https://github.com/Uncommon/Xit) — inspiration for the NSDocument/ReferenceFileDocument integration pattern.
 
 ## License
 
