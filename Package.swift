@@ -11,17 +11,9 @@ let package = Package(
     products: [
         .library(name: "GitDocKit", targets: ["GitDocKit"]),
     ],
-    dependencies: [
-        .package(url: "https://github.com/ibrahimcetin/SwiftGitX.git", from: "1.0.0"),
-    ],
+    dependencies: [],
     targets: [
-        .target(
-            name: "GitDocKit",
-            dependencies: ["SwiftGitX"]
-        ),
-        .testTarget(
-            name: "GitDocKitTests",
-            dependencies: ["GitDocKit"]
-        ),
+        .target(name: "GitDocKit", dependencies: []),
+        .testTarget(name: "GitDocKitTests", dependencies: ["GitDocKit"]),
     ]
 )

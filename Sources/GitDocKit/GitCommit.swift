@@ -1,5 +1,4 @@
 import Foundation
-import SwiftGitX
 
 /// An immutable, sendable signature for commit authors and committers.
 public struct GitSignature: Hashable, Sendable {
@@ -30,16 +29,7 @@ public struct GitCommit: Sendable, Identifiable, Hashable {
     /// The OID hex strings of parent commits.
     public let parentIDs: [String]
 
-    /// Creates a `GitCommit` from a SwiftGitX `Commit`.
-    init(from commit: SwiftGitX.Commit) {
-        self.id = commit.id.description
-        self.message = commit.message
-        self.author = GitSignature(name: commit.author.name, email: commit.author.email)
-        self.date = commit.author.date
-        self.parentIDs = commit.parents.map { $0.id.description }
-    }
-
-    /// Creates a `GitCommit` with explicit values (useful for testing).
+    /// Creates a `GitCommit` with explicit values.
     public init(id: String, message: String, author: GitSignature, date: Date, parentIDs: [String] = []) {
         self.id = id
         self.message = message
