@@ -1,3 +1,4 @@
+#if canImport(Combine)
 import XCTest
 @testable import GitDocKit
 import Foundation
@@ -101,3 +102,4 @@ final class GitDocKitTests: XCTestCase {
         XCTAssertNotEqual(a, c)
     }
 }
+#endif // canImport(Combine)

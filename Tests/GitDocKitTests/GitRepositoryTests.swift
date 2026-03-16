@@ -1,3 +1,4 @@
+#if canImport(Combine)
 import Foundation
 import Testing
 @testable import GitDocKit
@@ -191,3 +192,4 @@ struct GitRepositoryTests {
         #expect(all.count == 5)
     }
 }
+#endif // canImport(Combine)

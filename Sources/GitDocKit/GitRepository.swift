@@ -11,6 +11,7 @@ public struct GitStatusEntry: Identifiable, Hashable, Sendable {
     public let status: String
 }
 
+#if canImport(Combine)
 /// A main-actor-isolated wrapper providing observable, high-level git operations
 /// via SwiftGitX (libgit2 directly).
 @MainActor
@@ -255,6 +256,9 @@ public final class GitRepository: ObservableObject, Sendable {
         return "?"
     }
 }
+
+}
+#endif // canImport(Combine)
 
 // MARK: - Errors
 
