@@ -5,34 +5,13 @@ import Testing
 @Suite("GitRepository Tests")
 struct GitRepositoryTests {
 
-    /// Creates a temporary directory with a git repo initialized via `git init`.
-    private func makeTempRepo() throws -> URL {
+    /// Creates a temporary directory and initializes a git repo via SwiftGitX.
+    private func makeTempRepo() throws -> (URL, GitRepository) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("GitDocKitTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["init", tmp.path]
-        process.environment = [
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "HOME": tmp.path,
-            "PATH": "/usr/bin:/bin"
-        ]
-        try process.run()
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
-
-        // Configure user for commits
-        for (key, value) in [("user.name", "Test"), ("user.email", "test@test.com")] {
-            let cfg = Process()
-            cfg.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            cfg.arguments = ["-C", tmp.path, "config", key, value]
-            try cfg.run()
-            cfg.waitUntilExit()
-        }
-
-        return tmp
+        let repo = try GitRepository.create(at: tmp)
+        return (tmp, repo)
     }
 
     private func cleanup(_ url: URL) {
@@ -42,7 +21,7 @@ struct GitRepositoryTests {
     @Test("Open a git repository")
     @MainActor
     func openRepository() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, _) = try makeTempRepo()
         defer { cleanup(tmp) }
 
         let repo = try GitRepository(url: tmp)
@@ -52,13 +31,12 @@ struct GitRepositoryTests {
     @Test("Stage a file and commit")
     @MainActor
     func stageAndCommit() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
         let fileURL = tmp.appendingPathComponent("hello.txt")
         try "Hello, GitDocKit!".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let repo = try GitRepository(url: tmp)
         try repo.stageAll()
 
         let author = GitSignature(name: "Test", email: "test@test.com")
@@ -72,13 +50,12 @@ struct GitRepositoryTests {
     @Test("Commit appears in log")
     @MainActor
     func commitAppearsInLog() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
         let fileURL = tmp.appendingPathComponent("hello.txt")
         try "Hello".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let repo = try GitRepository(url: tmp)
         try repo.stageAll()
 
         let author = GitSignature(name: "Test", email: "test@test.com")
@@ -92,10 +69,9 @@ struct GitRepositoryTests {
     @Test("Multiple commits appear in log in order")
     @MainActor
     func multipleCommits() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
-        let repo = try GitRepository(url: tmp)
         let author = GitSignature(name: "Test", email: "test@test.com")
 
         let f1 = tmp.appendingPathComponent("a.txt")
@@ -117,13 +93,11 @@ struct GitRepositoryTests {
     @Test("Branch creation and checkout")
     @MainActor
     func branchCreateAndCheckout() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
-        let repo = try GitRepository(url: tmp)
         let author = GitSignature(name: "Test", email: "test@test.com")
 
-        // Need an initial commit before branching
         let f = tmp.appendingPathComponent("init.txt")
         try "init".write(to: f, atomically: true, encoding: .utf8)
         try repo.stageAll()
@@ -133,7 +107,6 @@ struct GitRepositoryTests {
         #expect(repo.currentBranch == "feature")
         #expect(repo.branches.contains("feature"))
 
-        // Switch back to the default branch
         let defaultBranch = repo.branches.first { $0 != "feature" } ?? "master"
         try repo.checkout(branch: defaultBranch)
         #expect(repo.currentBranch == defaultBranch)
@@ -142,19 +115,16 @@ struct GitRepositoryTests {
     @Test("Status shows modified and new files")
     @MainActor
     func statusShowsChanges() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
-        let repo = try GitRepository(url: tmp)
         let author = GitSignature(name: "Test", email: "test@test.com")
 
-        // Commit a file first
         let f = tmp.appendingPathComponent("tracked.txt")
         try "original".write(to: f, atomically: true, encoding: .utf8)
         try repo.stageAll()
         try repo.commit(message: "Initial", author: author)
 
-        // Modify existing file and add a new one
         try "modified".write(to: f, atomically: true, encoding: .utf8)
         let newFile = tmp.appendingPathComponent("untracked.txt")
         try "new".write(to: newFile, atomically: true, encoding: .utf8)
@@ -170,10 +140,9 @@ struct GitRepositoryTests {
     @Test("headOID is a valid hex string")
     @MainActor
     func headOIDIsValidHex() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
-        let repo = try GitRepository(url: tmp)
         let author = GitSignature(name: "Test", email: "test@test.com")
 
         let f = tmp.appendingPathComponent("file.txt")
@@ -203,10 +172,9 @@ struct GitRepositoryTests {
     @Test("Log limit parameter is respected")
     @MainActor
     func logLimitRespected() throws {
-        let tmp = try makeTempRepo()
+        let (tmp, repo) = try makeTempRepo()
         defer { cleanup(tmp) }
 
-        let repo = try GitRepository(url: tmp)
         let author = GitSignature(name: "Test", email: "test@test.com")
 
         for i in 1...5 {
