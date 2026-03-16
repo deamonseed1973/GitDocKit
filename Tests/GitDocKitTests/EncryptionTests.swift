@@ -186,6 +186,225 @@ final class EncryptionTests: XCTestCase {
         }
     }
 
+    // MARK: - Temporary Workspace Tests
+
+    func testTemporaryWorkspaceCleanup() throws {
+        let workspace = ReferenceFileTemporaryWorkspace()
+        try workspace.open()
+
+        let workspaceURL = workspace.url
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workspaceURL.path))
+
+        workspace.close()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workspaceURL.path))
+
+        // Safe to call close again.
+        workspace.close()
+    }
+
+    // MARK: - Encrypted Document Reader Tests
+
+    func testEncryptedDocumentReaderRoundTrip() throws {
+        let writer = ReferenceFileEncryptedDocumentWriter()
+        let reader = ReferenceFileEncryptedDocumentReader()
+        let password = "test-read-write-password"
+
+        // Create source content.
+        let sourceDir = tempDir.appendingPathComponent("reader-source")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try "hello reader".write(
+            to: sourceDir.appendingPathComponent("note.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let subDir = sourceDir.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
+        try "nested content".write(
+            to: subDir.appendingPathComponent("deep.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // Write the encrypted package.
+        let packageURL = tempDir.appendingPathComponent("Test.refdoc")
+        try writer.write(
+            sourceDirectory: sourceDir,
+            destinationURL: packageURL,
+            password: password
+        )
+
+        // Read it back.
+        let result = try reader.read(packageURL: packageURL, password: password)
+        defer { result.workspace.close() }
+
+        let noteContent = try String(
+            contentsOf: result.contentURL.appendingPathComponent("note.txt"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(noteContent, "hello reader")
+
+        let deepContent = try String(
+            contentsOf: result.contentURL.appendingPathComponent("sub/deep.txt"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(deepContent, "nested content")
+    }
+
+    func testEncryptedDocumentReaderWrongPassword() throws {
+        let writer = ReferenceFileEncryptedDocumentWriter()
+        let reader = ReferenceFileEncryptedDocumentReader()
+
+        let sourceDir = tempDir.appendingPathComponent("wrong-pw-source")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try "secret".write(
+            to: sourceDir.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let packageURL = tempDir.appendingPathComponent("WrongPW.refdoc")
+        try writer.write(
+            sourceDirectory: sourceDir,
+            destinationURL: packageURL,
+            password: "correct-password"
+        )
+
+        XCTAssertThrowsError(try reader.read(packageURL: packageURL, password: "wrong-password")) { error in
+            guard case ReferenceFileDocumentReaderError.wrongPassword = error else {
+                XCTFail("Expected wrongPassword, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testEncryptedDocumentReaderMissingManifest() throws {
+        let reader = ReferenceFileEncryptedDocumentReader()
+
+        // Create a package directory without manifest.json.
+        let packageURL = tempDir.appendingPathComponent("NoManifest.refdoc")
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try reader.read(packageURL: packageURL, password: "any")) { error in
+            guard case ReferenceFileDocumentReaderError.missingManifest = error else {
+                XCTFail("Expected missingManifest, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testEncryptedDocumentReaderMissingPayload() throws {
+        let reader = ReferenceFileEncryptedDocumentReader()
+
+        // Create a package with manifest but no payload.
+        let packageURL = tempDir.appendingPathComponent("NoPayload.refdoc")
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+
+        let manifest = ReferenceFileDocumentManifest.encrypted()
+        let manifestData = try manifest.encodeJSON()
+        try manifestData.write(to: packageURL.appendingPathComponent("manifest.json"))
+
+        XCTAssertThrowsError(try reader.read(packageURL: packageURL, password: "any")) { error in
+            guard case ReferenceFileDocumentReaderError.missingPayload = error else {
+                XCTFail("Expected missingPayload, got \(error)")
+                return
+            }
+        }
+    }
+
+    // MARK: - Encrypted Document Writer Tests
+
+    func testEncryptedDocumentWriterCreatesValidPackage() throws {
+        let writer = ReferenceFileEncryptedDocumentWriter()
+
+        let sourceDir = tempDir.appendingPathComponent("writer-source")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try "content".write(
+            to: sourceDir.appendingPathComponent("data.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let packageURL = tempDir.appendingPathComponent("Valid.refdoc")
+        try writer.write(
+            sourceDirectory: sourceDir,
+            destinationURL: packageURL,
+            password: "pw"
+        )
+
+        // Verify package structure.
+        let manifestURL = packageURL.appendingPathComponent("manifest.json")
+        let payloadURL = packageURL.appendingPathComponent("payload.zip.enc")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: payloadURL.path))
+
+        // Verify manifest is valid.
+        let manifestData = try Data(contentsOf: manifestURL)
+        let manifest = try ReferenceFileDocumentManifest.decodeJSON(from: manifestData)
+        XCTAssertEqual(manifest.storageMode, .encrypted)
+        XCTAssertEqual(manifest.encryption?.payloadFilename, "payload.zip.enc")
+    }
+
+    func testEncryptedDocumentWriterOverwriteSafe() throws {
+        let writer = ReferenceFileEncryptedDocumentWriter()
+
+        let sourceDir = tempDir.appendingPathComponent("overwrite-source")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try "original".write(
+            to: sourceDir.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let packageURL = tempDir.appendingPathComponent("Overwrite.refdoc")
+
+        // Create a dummy file at the destination.
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try "dummy".write(
+            to: packageURL.appendingPathComponent("dummy.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // Write should succeed, replacing the existing destination.
+        try writer.write(
+            sourceDirectory: sourceDir,
+            destinationURL: packageURL,
+            password: "pw"
+        )
+
+        // Verify new package structure exists.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: packageURL.appendingPathComponent("manifest.json").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: packageURL.appendingPathComponent("payload.zip.enc").path
+        ))
+    }
+
+    // MARK: - Document Error Tests
+
+    func testDocumentErrorDescriptions() {
+        let cases: [ReferenceFileDocumentError] = [
+            .wrongPassword,
+            .unsupportedFormat,
+            .unsupportedVersion,
+            .corruptDocument,
+            .missingContent,
+            .saveFailed(underlying: NSError(domain: "test", code: 1)),
+            .cleanupFailed,
+        ]
+
+        for error in cases {
+            let description = error.errorDescription
+            XCTAssertNotNil(description, "Missing errorDescription for \(error)")
+            XCTAssertFalse(description?.isEmpty ?? true, "Empty errorDescription for \(error)")
+
+            let suggestion = error.recoverySuggestion
+            XCTAssertNotNil(suggestion, "Missing recoverySuggestion for \(error)")
+            XCTAssertFalse(suggestion?.isEmpty ?? true, "Empty recoverySuggestion for \(error)")
+        }
+    }
+
     // MARK: - Full Pipeline Test
 
     func testFullArchiveThenEncryptRoundTrip() throws {
