@@ -256,8 +256,6 @@ public final class GitRepository: ObservableObject, Sendable {
         return "?"
     }
 }
-
-}
 #endif // canImport(Combine)
 
 // MARK: - Errors
