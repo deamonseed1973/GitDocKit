@@ -1,8 +1,8 @@
 name: Vouch
 
 on:
-  pull_request_target:
-    types: [opened, reopened]
+  pull_request:
+    types: [opened, reopened, synchronize]
   issues:
     types: [opened, reopened]
 
@@ -13,9 +13,10 @@ permissions:
 
 jobs:
   check-pr:
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: mitchellh/vouch/action/check-pr@v1
         with:
           pr-number: ${{ github.event.pull_request.number }}
@@ -27,6 +28,7 @@ jobs:
     if: github.event_name == 'issues'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: mitchellh/vouch/action/check-issue@v1
         with:
           issue-id: ${{ github.event.issue.number }}
