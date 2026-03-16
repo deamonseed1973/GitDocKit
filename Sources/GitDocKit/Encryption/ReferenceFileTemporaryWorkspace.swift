@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The workspace creates a uniquely-named directory under the system temporary directory
 /// and removes it on `close()` or `deinit`.
-public final class ReferenceFileTemporaryWorkspace: Sendable {
+public final class ReferenceFileTemporaryWorkspace: @unchecked Sendable {
 
     /// The URL of the workspace directory.
     public let url: URL
@@ -78,9 +78,9 @@ public final class ReferenceFileTemporaryWorkspace: Sendable {
 // MARK: - Locked State Helper
 
 /// A minimal thread-safe wrapper for mutable state.
-private final class LockedState<Value: Sendable>: Sendable {
+private final class LockedState<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private nonisolated(unsafe) var value: Value
+    private var value: Value
 
     init(initialState: Value) {
         self.value = initialState
