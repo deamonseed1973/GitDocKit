@@ -1,3 +1,4 @@
+#if canImport(Combine)
 import XCTest
 @testable import GitDocKit
 import Foundation
@@ -22,24 +23,6 @@ final class GitDocKitTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func runGit(_ args: [String], in directory: URL) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = args
-        process.currentDirectoryURL = directory
-        process.environment = [
-            "GIT_AUTHOR_NAME": "Test",
-            "GIT_AUTHOR_EMAIL": "test@example.com",
-            "GIT_COMMITTER_NAME": "Test",
-            "GIT_COMMITTER_EMAIL": "test@example.com",
-        ]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw NSError(domain: "GitDocKitTests", code: Int(process.terminationStatus))
-        }
-    }
-
     private var testAuthor: GitSignature {
         GitSignature(name: "Test", email: "test@example.com")
     }
@@ -55,17 +38,11 @@ final class GitDocKitTests: XCTestCase {
 
     @MainActor
     func testStageAndCommit() throws {
-        // Initialize repo with git CLI
-        try runGit(["init"], in: tempDir)
+        let repo = try GitRepository.create(at: tempDir)
 
-        // Create a file
         let filePath = tempDir.appendingPathComponent("hello.txt")
         try "Hello, GitDocKit!".write(to: filePath, atomically: true, encoding: .utf8)
 
-        // Open with GitRepository
-        let repo = try GitRepository(url: tempDir)
-
-        // Stage and commit
         try repo.stageAll()
         let commit = try repo.commit(message: "Initial commit", author: testAuthor)
 
@@ -77,12 +54,11 @@ final class GitDocKitTests: XCTestCase {
 
     @MainActor
     func testLogShowsCommit() throws {
-        try runGit(["init"], in: tempDir)
+        let repo = try GitRepository.create(at: tempDir)
 
         let filePath = tempDir.appendingPathComponent("file.txt")
         try "content".write(to: filePath, atomically: true, encoding: .utf8)
 
-        let repo = try GitRepository(url: tempDir)
         try repo.stageAll()
         try repo.commit(message: "First commit", author: testAuthor)
 
@@ -93,30 +69,23 @@ final class GitDocKitTests: XCTestCase {
 
     @MainActor
     func testUndoLastCommit() throws {
-        try runGit(["init"], in: tempDir)
+        let repo = try GitRepository.create(at: tempDir)
 
-        // Create and commit first file
         let file1 = tempDir.appendingPathComponent("file1.txt")
         try "first".write(to: file1, atomically: true, encoding: .utf8)
-
-        let repo = try GitRepository(url: tempDir)
         try repo.stageAll()
         try repo.commit(message: "First commit", author: testAuthor)
 
-        // Create and commit second file
         let file2 = tempDir.appendingPathComponent("file2.txt")
         try "second".write(to: file2, atomically: true, encoding: .utf8)
         try repo.stageAll()
         try repo.commit(message: "Second commit", author: testAuthor)
 
-        // Verify two commits exist
         var log = try repo.log()
         XCTAssertEqual(log.count, 2)
 
-        // Undo last commit
         try repo.undoLastCommit()
 
-        // Verify only one commit remains
         log = try repo.log()
         XCTAssertEqual(log.count, 1)
         XCTAssertEqual(log.first?.message, "First commit")
@@ -133,3 +102,4 @@ final class GitDocKitTests: XCTestCase {
         XCTAssertNotEqual(a, c)
     }
 }
+#endif // canImport(Combine)

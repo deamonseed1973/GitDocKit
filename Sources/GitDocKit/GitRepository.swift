@@ -1,17 +1,19 @@
 import Foundation
+import SwiftGitX
 #if canImport(Combine)
 import Combine
 #endif
 
-/// A status entry from `git status --porcelain`.
+/// A status entry representing a file's status in the working directory.
 public struct GitStatusEntry: Identifiable, Hashable, Sendable {
     public let id: String
     public let path: String
     public let status: String
 }
 
+#if canImport(Combine)
 /// A main-actor-isolated wrapper providing observable, high-level git operations
-/// via the `git` CLI.
+/// via SwiftGitX (libgit2 directly).
 @MainActor
 public final class GitRepository: ObservableObject, Sendable {
 
@@ -32,31 +34,10 @@ public final class GitRepository: ObservableObject, Sendable {
     /// Names of all local branches.
     @Published public var branches: [String] = []
 
-    // MARK: - Git CLI Helper
+    // MARK: - Internal
 
-    @discardableResult
-    private func run(_ args: [String], env: [String: String]? = nil) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = args
-        process.currentDirectoryURL = url
-        var environment = ProcessInfo.processInfo.environment
-        if let env { environment.merge(env) { _, new in new } }
-        process.environment = environment
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        let errPipe = Pipe()
-        process.standardError = errPipe
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let errMsg = String(data: errData, encoding: .utf8) ?? ""
-            throw GitRepositoryError.gitCommandFailed(errMsg)
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
+    /// The underlying SwiftGitX repository handle.
+    private let repo: Repository
 
     // MARK: - Initialization
 
@@ -65,20 +46,18 @@ public final class GitRepository: ObservableObject, Sendable {
     /// - Throws: If the repository cannot be opened.
     public init(url: URL) throws {
         self.url = url
-        // Verify this is a git repository
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["rev-parse", "--git-dir"]
-        process.currentDirectoryURL = url
-        process.environment = ProcessInfo.processInfo.environment
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
+        do {
+            self.repo = try Repository.open(at: url)
+        } catch {
             throw GitRepositoryError.repositoryNotFound
         }
+        try? refresh()
+    }
+
+    /// Internal initializer that accepts a pre-opened SwiftGitX Repository.
+    internal init(url: URL, repo: Repository) {
+        self.url = url
+        self.repo = repo
         try? refresh()
     }
 
@@ -87,28 +66,33 @@ public final class GitRepository: ObservableObject, Sendable {
     /// - Returns: A new `GitRepository` instance.
     @discardableResult
     public static func create(at url: URL) throws -> GitRepository {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["init", url.path]
-        process.environment = ProcessInfo.processInfo.environment
-        let errPipe = Pipe()
-        process.standardOutput = Pipe()
-        process.standardError = errPipe
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let errMsg = String(data: errData, encoding: .utf8) ?? ""
-            throw GitRepositoryError.gitCommandFailed(errMsg)
+        let repo: Repository
+        do {
+            repo = try Repository.create(at: url)
+        } catch {
+            throw GitRepositoryError.gitCommandFailed(error.localizedDescription)
         }
-        return try GitRepository(url: url)
+        return GitRepository(url: url, repo: repo)
     }
 
     // MARK: - Staging
 
     /// Stages all changes in the working directory.
     public func stageAll() throws {
-        try run(["add", "-A"])
+        let statusEntries = try repo.status()
+        var paths: [String] = []
+        for entry in statusEntries {
+            if let delta = entry.workingTree {
+                paths.append(delta.newFile.path)
+            }
+            if let delta = entry.index {
+                paths.append(delta.newFile.path)
+            }
+        }
+        let uniquePaths = Array(Set(paths))
+        if !uniquePaths.isEmpty {
+            try repo.add(paths: uniquePaths)
+        }
     }
 
     // MARK: - Committing
@@ -120,28 +104,21 @@ public final class GitRepository: ObservableObject, Sendable {
     /// - Returns: A `GitCommit` value representing the new commit.
     @discardableResult
     public func commit(message: String, author: GitSignature) throws -> GitCommit {
-        try run([
-            "-c", "user.name=\(author.name)",
-            "-c", "user.email=\(author.email)",
-            "commit", "-m", message,
-        ])
+        // Set author/committer in repo config
+        try repo.config.set("user.name", to: author.name)
+        try repo.config.set("user.email", to: author.email)
 
-        let oid = try run(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let swiftGitXCommit = try repo.commit(message: message)
 
-        let dateStr = try run(["log", "-1", "--format=%aI"]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let formatter = ISO8601DateFormatter()
-        let date = formatter.date(from: dateStr) ?? Date()
-
-        let parentLine = try run(["log", "-1", "--format=%P"]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let parentIDs = parentLine.isEmpty ? [] : parentLine.split(separator: " ").map(String.init)
+        let parentIDs = swiftGitXCommit.parents.map { $0.id.hex }
 
         try? refresh()
 
         return GitCommit(
-            id: oid,
+            id: swiftGitXCommit.id.hex,
             message: message,
             author: author,
-            date: date,
+            date: swiftGitXCommit.date,
             parentIDs: parentIDs
         )
     }
@@ -151,14 +128,20 @@ public final class GitRepository: ObservableObject, Sendable {
     /// Checks out the branch with the given name.
     /// - Parameter branch: The branch name to check out.
     public func checkout(branch: String) throws {
-        try run(["checkout", branch])
+        let branchRef = try repo.branch.get(named: branch)
+        try repo.switch(to: branchRef)
         try? refresh()
     }
 
     /// Creates a new branch at the current HEAD.
     /// - Parameter name: The name for the new branch.
     public func createBranch(name: String) throws {
-        try run(["checkout", "-b", name])
+        let headRef = try repo.HEAD
+        guard let headCommit = headRef.target as? SwiftGitX.Commit else {
+            throw GitRepositoryError.gitCommandFailed("HEAD does not point to a commit")
+        }
+        let newBranch = try repo.branch.create(named: name, target: headCommit)
+        try repo.switch(to: newBranch)
         try? refresh()
     }
 
@@ -168,32 +151,23 @@ public final class GitRepository: ObservableObject, Sendable {
     /// - Parameter limit: Maximum number of commits to return. Defaults to 50.
     /// - Returns: An array of `GitCommit` values.
     public func log(limit: Int = 50) throws -> [GitCommit] {
-        let output = try run(["log", "-n", "\(limit)", "--format=%H|%s|%an|%ae|%aI|%P"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !output.isEmpty else { return [] }
-
-        let formatter = ISO8601DateFormatter()
-
-        return output.split(separator: "\n", omittingEmptySubsequences: true).map { line ->  GitCommit in
-            let parts = line.split(separator: "|", maxSplits: 5, omittingEmptySubsequences: false).map(String.init)
-            let oid = parts.count > 0 ? parts[0] : ""
-            let message = parts.count > 1 ? parts[1] : ""
-            let authorName = parts.count > 2 ? parts[2] : ""
-            let authorEmail = parts.count > 3 ? parts[3] : ""
-            let dateStr = parts.count > 4 ? parts[4] : ""
-            let parentStr = parts.count > 5 ? parts[5] : ""
-            let parentIDs = parentStr.isEmpty ? [] : parentStr.split(separator: " ").map(String.init)
-            let date = formatter.date(from: dateStr) ?? Date()
-
-            return GitCommit(
-                id: oid,
-                message: message,
-                author: GitSignature(name: authorName, email: authorEmail),
-                date: date,
+        let commitSequence = try repo.log()
+        var result: [GitCommit] = []
+        for swiftGitXCommit in commitSequence {
+            if result.count >= limit { break }
+            let parentIDs = swiftGitXCommit.parents.map { $0.id.hex }
+            result.append(GitCommit(
+                id: swiftGitXCommit.id.hex,
+                message: swiftGitXCommit.message,
+                author: GitSignature(
+                    name: swiftGitXCommit.author.name,
+                    email: swiftGitXCommit.author.email
+                ),
+                date: swiftGitXCommit.date,
                 parentIDs: parentIDs
-            )
+            ))
         }
+        return result
     }
 
     // MARK: - Reset
@@ -201,7 +175,15 @@ public final class GitRepository: ObservableObject, Sendable {
     /// Resets the repository to HEAD~1 with a mixed reset (undo the last commit,
     /// keeping changes in the working directory).
     public func undoLastCommit() throws {
-        try run(["reset", "--mixed", "HEAD~1"])
+        let headRef = try repo.HEAD
+        guard let headCommit = headRef.target as? SwiftGitX.Commit else {
+            throw GitRepositoryError.noCommitToUndo
+        }
+        let parents = headCommit.parents
+        guard let parentCommit = parents.first else {
+            throw GitRepositoryError.noCommitToUndo
+        }
+        try repo.reset(to: parentCommit, mode: .mixed)
         try? refresh()
     }
 
@@ -210,32 +192,37 @@ public final class GitRepository: ObservableObject, Sendable {
     /// Re-reads branches, commits, and status from the repository on disk.
     public func refresh() throws {
         // Current branch
-        if let branchOutput = try? run(["symbolic-ref", "--short", "HEAD"]) {
-            currentBranch = branchOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if currentBranch?.isEmpty == true { currentBranch = nil }
+        if let headRef = try? repo.HEAD, let branch = headRef as? Branch {
+            currentBranch = branch.name
         } else {
             currentBranch = nil
         }
 
         // Branches
-        if let branchList = try? run(["branch", "--format=%(refname:short)"]) {
-            branches = branchList
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .map(String.init)
+        if let branchList = try? repo.branch.list(.local) {
+            branches = branchList.map(\.name)
         } else {
             branches = []
         }
 
         // Status
-        if let statusOutput = try? run(["status", "--porcelain"]) {
-            let lines = statusOutput.split(separator: "\n", omittingEmptySubsequences: true)
-            status = lines.map { line ->  GitStatusEntry in
-                let lineStr = String(line)
-                let statusCode = String(lineStr.prefix(2)).trimmingCharacters(in: .whitespaces)
-                let path = String(lineStr.dropFirst(3))
-                return GitStatusEntry(id: path, path: path, status: statusCode)
+        if let statusEntries = try? repo.status() {
+            var entries: [GitStatusEntry] = []
+            for entry in statusEntries {
+                let path: String
+                let statusCode: String
+                if let delta = entry.workingTree {
+                    path = delta.newFile.path
+                    statusCode = statusString(for: entry.status)
+                } else if let delta = entry.index {
+                    path = delta.newFile.path
+                    statusCode = statusString(for: entry.status)
+                } else {
+                    continue
+                }
+                entries.append(GitStatusEntry(id: path, path: path, status: statusCode))
             }
+            status = entries
         } else {
             status = []
         }
@@ -248,11 +235,28 @@ public final class GitRepository: ObservableObject, Sendable {
 
     /// Returns the OID string of the current HEAD commit, or nil if HEAD is unborn.
     public var headOID: String? {
-        guard let output = try? run(["rev-parse", "HEAD"]) else { return nil }
-        let oid = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return oid.isEmpty ? nil : oid
+        guard let headRef = try? repo.HEAD,
+              let commit = headRef.target as? SwiftGitX.Commit else {
+            return nil
+        }
+        let hex = commit.id.hex
+        return hex.isEmpty ? nil : hex
+    }
+
+    // MARK: - Private
+
+    private func statusString(for statuses: [StatusEntry.Status]) -> String {
+        if statuses.contains(.indexNew) { return "A" }
+        if statuses.contains(.indexModified) { return "M" }
+        if statuses.contains(.indexDeleted) { return "D" }
+        if statuses.contains(.indexRenamed) { return "R" }
+        if statuses.contains(.workingTreeNew) { return "?" }
+        if statuses.contains(.workingTreeModified) { return "M" }
+        if statuses.contains(.workingTreeDeleted) { return "D" }
+        return "?"
     }
 }
+#endif // canImport(Combine)
 
 // MARK: - Errors
 

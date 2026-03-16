@@ -1,7 +1,6 @@
 import Foundation
-#if canImport(Combine)
+#if canImport(Combine) && (os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
 import Combine
-#endif
 
 /// An identifiable representation of a git hook script.
 public struct GitHook: Identifiable, Hashable, Sendable {
@@ -88,3 +87,4 @@ public final class GitHookObserver: ObservableObject {
         }
     }
 }
+#endif // canImport(Combine) && Apple platforms

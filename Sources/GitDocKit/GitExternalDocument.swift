@@ -2,13 +2,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A `ReferenceFileDocument` backed by a git repository on disk.
+/// A `ReferenceFileDocument` that references an external git repository on disk.
 ///
 /// The git repository _is_ the persistence layer — the document never serializes
 /// its own data. Each commit can optionally register an undo action that resets
 /// the repo to HEAD~1 (mixed).
 @MainActor
-public final class GitReferenceFileDocument: ReferenceFileDocument {
+public final class GitExternalDocument: ReferenceFileDocument {
 
     // MARK: - Content Types
 
@@ -42,9 +42,6 @@ public final class GitReferenceFileDocument: ReferenceFileDocument {
 
     /// Opens the directory at the given file URL as a git repository.
     public required init(configuration: ReadConfiguration) throws {
-        // ReferenceFileDocument provides the file wrapper for the directory.
-        // We need the URL, which is available via the file wrapper's filename
-        // and the expectation that the system passes the directory URL.
         if let url = configuration.file.preferredFilename.flatMap({ URL(fileURLWithPath: $0) }) {
             self.repository = try? GitRepository(url: url)
         }
@@ -72,4 +69,7 @@ public final class GitReferenceFileDocument: ReferenceFileDocument {
         undoManager.setActionName("Undo: \(message)")
     }
 }
+
+/// Backwards-compatible typealias.
+public typealias GitReferenceFileDocument = GitExternalDocument
 #endif
