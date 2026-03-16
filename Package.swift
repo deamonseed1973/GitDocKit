@@ -13,9 +13,10 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ibrahimcetin/SwiftGitX.git", from: "0.4.0"),
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.19"),
     ],
     targets: [
-        .target(name: "GitDocKit", dependencies: ["SwiftGitX"]),
+        .target(name: "GitDocKit", dependencies: ["SwiftGitX", "ZIPFoundation"]),
         .testTarget(name: "GitDocKitTests", dependencies: ["GitDocKit"]),
     ]
 )
